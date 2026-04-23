@@ -1,0 +1,40 @@
+{
+  "name": "a2a-bridge-mcp",
+  "version": "0.1.0",
+  "mcpName": "io.github.mdfifty50-boop/a2a-bridge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mdfifty50-boop/a2a-bridge-mcp"
+  },
+  "description": "MCP server for agent-to-agent communication — capability discovery, task delegation, and result aggregation across MCP agents",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "a2a-bridge-mcp": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "a2a",
+    "agent-to-agent",
+    "task-delegation",
+    "capability-discovery",
+    "multi-agent",
+    "ai-agent",
+    "agentic-engineering",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  }
+}

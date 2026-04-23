@@ -1,0 +1,44 @@
+{
+  "serverInfo": {
+    "name": "a2a-bridge-mcp",
+    "version": "0.1.0",
+    "description": "MCP server for agent-to-agent communication — capability discovery, task delegation, and result aggregation across MCP agents",
+    "author": "THRONE AI",
+    "license": "MIT",
+    "homepage": "https://github.com/mdfifty50-boop/a2a-bridge-mcp",
+    "repository": "https://github.com/mdfifty50-boop/a2a-bridge-mcp"
+  },
+  "capabilities": {
+    "tools": [
+      { "name": "register_agent", "description": "Register an agent with capabilities, input/output schemas for discovery" },
+      { "name": "discover_agents", "description": "Find agents matching a capability need with fuzzy matching and scoring" },
+      { "name": "delegate_task", "description": "Delegate a task to a specific agent with timeout and status tracking" },
+      { "name": "get_task_result", "description": "Get result or status of a previously delegated task" },
+      { "name": "broadcast_task", "description": "Send a task to all matching agents and aggregate results" },
+      { "name": "get_agent_card", "description": "Get an agent's full capability card (A2A-inspired)" },
+      { "name": "list_agents", "description": "List all registered agents, optionally filtered by capability" }
+    ],
+    "resources": [
+      { "uri": "a2a://agents", "description": "All registered agents and their capabilities" }
+    ]
+  },
+  "categories": ["multi-agent", "orchestration", "developer-tools", "agentic-engineering"],
+  "keywords": ["a2a", "agent-to-agent", "task-delegation", "capability-discovery", "multi-agent", "ai-agent", "orchestration"],
+  "pricing": {
+    "free_tier": true,
+    "free_limit": "Unlimited agents, in-memory only",
+    "pro": "$99/month — persistent storage, webhook callbacks, multi-tenant",
+    "enterprise": "$499/month — SSO, audit logs, custom routing policies"
+  },
+  "install": {
+    "npm": "npx a2a-bridge-mcp",
+    "claude_desktop": {
+      "mcpServers": {
+        "a2a-bridge": {
+          "command": "npx",
+          "args": ["a2a-bridge-mcp"]
+        }
+      }
+    }
+  }
+}
