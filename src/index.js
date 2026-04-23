@@ -3,9 +3,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import {
+  registerAgent as dbRegisterAgent,
+  getAgent, hasAgent, getAllAgents,
+  incrementAgentCompleted, incrementAgentFailed,
+  insertDelegation, getDelegation, completeDelegation, failDelegation,
+  timeoutDelegation, getDelegationsByAgent,
+} from './db.js';
 
-const agents = new Map();
-const tasks = new Map();
 let taskCounter = 0;
 
 function tokenize(text) {
@@ -40,12 +45,10 @@ function agentSummary(a) {
 
 function autoTimeout(taskId, ms) {
   setTimeout(() => {
-    const t = tasks.get(taskId);
-    if (t && t.status === 'pending') {
-      t.status = 'failed'; t.error = 'Task timed out';
-      t.updated_at = new Date().toISOString(); t.completed_at = t.updated_at;
-      const a = agents.get(t.to_agent);
-      if (a) a.tasks_failed++;
+    const changed = timeoutDelegation(taskId);
+    if (changed) {
+      const t = getDelegation(taskId);
+      if (t) incrementAgentFailed(t.to_agent);
     }
   }, ms);
 }
@@ -68,10 +71,7 @@ server.tool(
     endpoint: z.string().default('').describe('Optional endpoint or transport hint'),
   },
   async (p) => {
-    const card = { agent_id: p.agent_id, capabilities: p.capabilities, description: p.description,
-      input_schema: p.input_schema, output_schema: p.output_schema, endpoint: p.endpoint,
-      registered_at: new Date().toISOString(), tasks_completed: 0, tasks_failed: 0 };
-    agents.set(p.agent_id, card);
+    const card = dbRegisterAgent(p);
     return reply({ registered: true, agent_id: card.agent_id, capabilities: card.capabilities, registered_at: card.registered_at });
   }
 );
@@ -86,7 +86,7 @@ server.tool(
   },
   async ({ capability_needed, min_score }) => {
     const results = [];
-    for (const agent of agents.values()) {
+    for (const agent of getAllAgents()) {
       const score = matchAgent(agent, capability_needed);
       if (score >= min_score) {
         results.push({ agent_id: agent.agent_id, score: Math.round(score * 100) / 100,
@@ -110,13 +110,13 @@ server.tool(
     timeout_ms: z.number().int().min(1000).default(30000).describe('Timeout in milliseconds (default 30s)'),
   },
   async (p) => {
-    if (!agents.has(p.to_agent)) return reply({ error: `Agent "${p.to_agent}" is not registered` });
+    if (!hasAgent(p.to_agent)) return reply({ error: `Agent "${p.to_agent}" is not registered` });
     const taskId = genId();
     const now = new Date().toISOString();
     const task = { task_id: taskId, from_agent: p.from_agent, to_agent: p.to_agent,
       task_description: p.task_description, input_data: p.input_data, timeout_ms: p.timeout_ms,
       status: 'pending', result: null, error: null, created_at: now, updated_at: now, completed_at: null };
-    tasks.set(taskId, task);
+    insertDelegation(task);
     autoTimeout(taskId, p.timeout_ms);
     return reply({ delegated: true, task_id: taskId, from_agent: task.from_agent,
       to_agent: task.to_agent, status: task.status, timeout_ms: task.timeout_ms, created_at: task.created_at });
@@ -133,20 +133,19 @@ server.tool(
     submit_error: z.string().optional().describe('Submit failure error message'),
   },
   async ({ task_id, submit_result, submit_error }) => {
-    const task = tasks.get(task_id);
+    const task = getDelegation(task_id);
     if (!task) return reply({ error: `Task "${task_id}" not found` });
     if (submit_result !== undefined) {
-      task.status = 'completed'; task.result = submit_result;
-      task.updated_at = new Date().toISOString(); task.completed_at = task.updated_at;
-      const a = agents.get(task.to_agent); if (a) a.tasks_completed++;
+      completeDelegation(task_id, submit_result);
+      incrementAgentCompleted(task.to_agent);
     } else if (submit_error !== undefined) {
-      task.status = 'failed'; task.error = submit_error;
-      task.updated_at = new Date().toISOString(); task.completed_at = task.updated_at;
-      const a = agents.get(task.to_agent); if (a) a.tasks_failed++;
+      failDelegation(task_id, submit_error);
+      incrementAgentFailed(task.to_agent);
     }
-    return reply({ task_id: task.task_id, status: task.status, from_agent: task.from_agent,
-      to_agent: task.to_agent, task_description: task.task_description,
-      result: task.result, error: task.error, created_at: task.created_at, completed_at: task.completed_at });
+    const updated = getDelegation(task_id);
+    return reply({ task_id: updated.task_id, status: updated.status, from_agent: updated.from_agent,
+      to_agent: updated.to_agent, task_description: updated.task_description,
+      result: updated.result, error: updated.error, created_at: updated.created_at, completed_at: updated.completed_at });
   }
 );
 
@@ -163,21 +162,22 @@ server.tool(
     timeout_ms: z.number().int().min(1000).default(30000).describe('Timeout per agent in milliseconds'),
   },
   async (p) => {
+    const allAgents = getAllAgents();
     const matched = [];
-    for (const agent of agents.values()) {
+    for (const agent of allAgents) {
       const score = matchAgent(agent, p.capability_needed);
       if (score >= p.min_score) matched.push({ agent, score });
     }
     matched.sort((a, b) => b.score - a.score);
     if (!matched.length) {
-      return reply({ broadcast: false, reason: `No agents match "${p.capability_needed}" (min_score ${p.min_score})`, agents_checked: agents.size });
+      return reply({ broadcast: false, reason: `No agents match "${p.capability_needed}" (min_score ${p.min_score})`, agents_checked: allAgents.length });
     }
     const now = new Date().toISOString();
     const group = `bcast_${Date.now()}`;
     const taskList = [];
     for (const { agent, score } of matched) {
       const taskId = genId();
-      tasks.set(taskId, { task_id: taskId, from_agent: p.from_agent, to_agent: agent.agent_id,
+      insertDelegation({ task_id: taskId, from_agent: p.from_agent, to_agent: agent.agent_id,
         task_description: p.task_description, input_data: p.input_data, timeout_ms: p.timeout_ms,
         status: 'pending', result: null, error: null, broadcast_group: group, match_score: score,
         created_at: now, updated_at: now, completed_at: null });
@@ -194,13 +194,14 @@ server.tool(
   "Get an agent's full capability card — capabilities, schemas, stats. Inspired by Google A2A agent cards.",
   { agent_id: z.string().describe('Agent identifier') },
   async ({ agent_id }) => {
-    const agent = agents.get(agent_id);
+    const agent = getAgent(agent_id);
     if (!agent) return reply({ error: `Agent "${agent_id}" is not registered` });
     let pending = 0, running = 0, completed = 0, failed = 0;
-    for (const t of tasks.values()) {
-      if (t.to_agent !== agent_id) continue;
-      if (t.status === 'pending') pending++; else if (t.status === 'running') running++;
-      else if (t.status === 'completed') completed++; else if (t.status === 'failed') failed++;
+    for (const t of getDelegationsByAgent(agent_id)) {
+      if (t.status === 'pending') pending++;
+      else if (t.status === 'running') running++;
+      else if (t.status === 'completed') completed++;
+      else if (t.status === 'failed') failed++;
     }
     return reply({ agent_id: agent.agent_id, description: agent.description,
       capabilities: agent.capabilities, input_schema: agent.input_schema, output_schema: agent.output_schema,
@@ -218,7 +219,7 @@ server.tool(
   { filter: z.string().default('').describe('Capability keyword to filter by (empty = show all)') },
   async ({ filter }) => {
     const results = [];
-    for (const agent of agents.values()) {
+    for (const agent of getAllAgents()) {
       if (filter) {
         const score = matchAgent(agent, filter);
         if (score < 0.1) continue;
@@ -234,7 +235,7 @@ server.tool(
 
 // Resource: a2a://agents
 server.resource('agents', 'a2a://agents', async () => {
-  const all = []; for (const a of agents.values()) all.push(agentSummary(a));
+  const all = getAllAgents().map(agentSummary);
   return { contents: [{ uri: 'a2a://agents', mimeType: 'application/json',
     text: JSON.stringify({ agents: all, total: all.length, generated_at: new Date().toISOString() }, null, 2) }] };
 });
